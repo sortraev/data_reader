@@ -2,7 +2,7 @@ prog=data_reader
 src=data_reader.c
 headers=util.h parsing.h array_t.h
 
-gcc_flags=-g -O3 -Wall -Wextra -pedantic
+gcc_flags=-g -g3 -Wall -Wextra -pedantic
 test_dir=./tests
 
 
@@ -30,4 +30,4 @@ test: test_exe
 	./data_reader $(test_dir)/empty.in  | diff $(test_dir)/empty.out  - && echo Success
 
 clean:
-	rm -rf $(prog) test_exe
+	rm -rf $(prog) test_exe vgcore*

@@ -1,6 +1,8 @@
-#pragma once
-#include "util.h"
+#ifndef ARRAY_T_H
+#define ARRAY_T_H
 
+#include "util.h"
+#include "types.h"
 
 typedef struct {
   uint64_t size;
@@ -10,12 +12,11 @@ typedef struct {
 typedef struct array_t {
   void     *data;
   uint64_t *dims;
-  uint8_t   num_dims;
+  int32_t   num_dims;
+  type      elem_t;
 } array_t;
 
-
-
-array_t *init_array(uint64_t len) {
+array_t *array_init(uint64_t len) {
 
   array_t *arr  = Malloc(sizeof(array_t));
   arr->data     = Malloc(len * sizeof(TYPE));
@@ -23,13 +24,6 @@ array_t *init_array(uint64_t len) {
   arr->num_dims = 0;
 
   return arr;
-}
-
-
-void free_array(array_t *arr) {
-  free(arr->data);
-  free(arr->dims);
-  free(arr);
 }
 
 static uint64_t dims_size(uint64_t *dims, uint8_t start_dim, uint8_t num_dims) {
@@ -40,14 +34,19 @@ static uint64_t dims_size(uint64_t *dims, uint8_t start_dim, uint8_t num_dims) {
   return acc;
 }
 
+void array_destroy(array_t *arr) {
+  if (arr) {
+    free(arr->data);
+    free(arr->dims);
+  }
+  free(arr);
+}
 
 uint64_t array_len(array_t *arr) {
   return dims_size(arr->dims, 0, arr->num_dims);
 }
 
-
-// TODO: make non-recursive using a stack?
-void __print_array(void     *data,
+void __array_print(void     *data,
                    uint64_t *dims,
                    int8_t    this_dim,
                    int8_t    dims_left,
@@ -67,7 +66,7 @@ void __print_array(void     *data,
       fprintf(WHERE_PRINT, FORMAT, ((TYPE*)data)[offset+i]);
     }
     else {
-      __print_array(data, dims,
+      __array_print(data, dims,
                     this_dim+1, dims_left-1,
                     offset + i*size_inner_dims);
     }
@@ -80,23 +79,30 @@ void __print_array(void     *data,
   fprintf(WHERE_PRINT, "]");
 }
 
-void print_array(array_t *arr) {
+void array_print(array_t *arr) {
 
-  uint64_t *dims      = arr->dims;
-  void     *data      = arr->data;
-  uint8_t   dims_left = arr->num_dims;
-
-  uint8_t  start_dim   = 0;
-  uint64_t data_offset = 0;
+  uint64_t *dims     = arr->dims;
+  void     *data     = arr->data;
+  uint8_t   num_dims = arr->num_dims;
 
   fprintf(WHERE_PRINT, ">> ");
-  __print_array(data, dims, start_dim, dims_left, data_offset);
+
+  if (num_dims == 0) {
+    fprintf(WHERE_PRINT, FORMAT, ((TYPE*)data)[0]);
+  }
+  else {
+
+    uint8_t  start_dim   = 0;
+    uint64_t data_offset = 0;
+
+    __array_print(data, dims, start_dim, num_dims, data_offset);
+  }
   fprintf(WHERE_PRINT, "\n");
 }
 
 
 
-void print_array_flat(array_t *arr, int len) {
+void array_print_flat(array_t *arr, int len) {
 
   int64_t *data = (int64_t*) arr->data;
 
@@ -109,3 +115,4 @@ void print_array_flat(array_t *arr, int len) {
   else
     printf("]\n");
 }
+#endif // ARRAY_T_H
