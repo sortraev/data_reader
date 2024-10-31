@@ -16,10 +16,10 @@ typedef struct array_t {
   type      elem_t;
 } array_t;
 
-array_t *array_init(uint64_t len) {
+array_t *array_init(uint64_t len, size_t elem_size) {
 
   array_t *arr  = Malloc(sizeof(array_t));
-  arr->data     = Malloc(len * sizeof(TYPE));
+  arr->data     = Malloc(len * elem_size);
   arr->dims     = Calloc(NUM_DIMS_MAX, sizeof(uint64_t));
   arr->num_dims = 0;
 

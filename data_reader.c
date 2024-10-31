@@ -1,23 +1,24 @@
 #include "array_t.h"
 #include "parsing.h"
+#include "types.h"
 #include <signal.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define ERROR(msg) {fprintf(stderr, (msg)); i = FAULTY_INPUT; break;}
+#define ERROR(msg) {fprintf(stderr, (msg)); status = FAULTY_INPUT; break;}
 
-static void next_token(FILE *in, char *buf) {
+static int next_token(FILE *f, char *buf, const int buf_size) {
 
-  skip_whitespace(in);
+  skip_whitespace(f);
 
   int8_t c;
   uint8_t i = 0;
-  while (i < BUF_SIZE - 1) {
+  while (i < buf_size - 1) {
 
-    buf[i] = c = getc(in);
+    buf[i] = c = getc(f);
 
     if (c == EOF) {
       buf[i] = 0;
-      return;
+      return EOF;
     }
 
     else if (!is_constituent(c)) {
@@ -25,19 +26,22 @@ static void next_token(FILE *in, char *buf) {
         buf[i+1] = 0;
       }
       else {
-        ungetc(c, in);
+        ungetc(c, f);
         buf[i] = 0;
       }
-      return;
+      break;
     }
     i++;
   }
+  return 0;
 }
 
-static int64_t read_array(FILE *in, array_t *arr) {
+static array_t *read_array(FILE *f) {
 
-  char buf[BUF_SIZE];
-  buf[BUF_SIZE-1] = '\0';
+  array_t *arr = array_init(ARR_LEN_INIT, sizeof(float)); // TODO: generalize.
+
+  static char buf[BUF_SIZE];
+  buf[BUF_SIZE - 1] = '\0';
 
   void     *out  = arr->data;
   uint64_t *dims = arr->dims;
@@ -45,35 +49,59 @@ static int64_t read_array(FILE *in, array_t *arr) {
   uint64_t *tmp_dims = Calloc(NUM_DIMS_MAX, sizeof(uint64_t));
   uint8_t  *visited  = Calloc(NUM_DIMS_MAX, sizeof(uint8_t));
 
-  int64_t len = ARR_LEN_INIT;
-  int64_t i   = 0;
+  uint64_t len = ARR_LEN_INIT;
+  uint64_t i   = 0;
 
-  int8_t current_dim = -1;
-  int8_t inner_dim   = -1;
+  int32_t current_dim = -1;
+  int32_t inner_dim   = -1;
 
-  TYPE tmp_read_val;
+  typed_val tv;
 
-  while (1) {
-    next_token(in, buf);
+  int status = 0;
 
-    if (strlen(buf) == 0) {
+  do {
+    if (next_token(f, buf, BUF_SIZE) == EOF || *buf == '\0') {
       if (current_dim > -1) {
         ERROR("Unexpected EOF!\n");
       }
-      break;
+      else {
+        status = EOF;
+        break;
+      }
     }
 
-    else if (streq (buf, "]")) {
+    else if (streq(buf, "[")) {
+      /* 
+       * entering array dimension.
+       */
 
+      if (current_dim >= NUM_DIMS_MAX - 1) {
+        ERROR("Too many dimensions in input! (max 127)\n");
+      }
+      else if (inner_dim >= 0 && current_dim >= inner_dim) {
+        ERROR("Non-scalar value (i.e. array) in innermost dimension!\n");
+      }
+
+      if (current_dim >= 0) {
+        tmp_dims[current_dim]++;
+      }
+      current_dim++;
+      tmp_dims[current_dim] = 0;
+    }
+
+    else if (streq(buf, "]")) {
+      /*
+       * exiting array dimension.
+       */
       if (current_dim < 0) {
         ERROR("Unexpected closing bracket!\n");
       }
 
-
       // if dim already visited, assert that size equals expected size.
-      else if (visited[current_dim] &&
-               tmp_dims[current_dim] != dims[current_dim]) {
-        ERROR("Input array is irregular!\n");
+      else if (visited[current_dim]) {
+        if (tmp_dims[current_dim] != dims[current_dim]) {
+          ERROR("Input array is irregular!\n");
+        }
       }
 
       // if dim not yet visited ..
@@ -81,6 +109,13 @@ static int64_t read_array(FILE *in, array_t *arr) {
         // record its size and note that it has been visited.
         dims[current_dim] = tmp_dims[current_dim];
         visited[current_dim] = 1;
+
+        // typically we find the innermost dim when we find the first array
+        // element. if this hasn't been found when we exit a dim, this means the
+        // entire array must be empty (or ill-formed).
+        if (inner_dim < 0) {
+          inner_dim = current_dim;
+        }
       }
 
       current_dim--;
@@ -90,62 +125,64 @@ static int64_t read_array(FILE *in, array_t *arr) {
       // TODO: should probably comma-separate values?
     }
 
-    else if (streq(buf, "[")) {
-
-      // entering dim.
-      if (current_dim >= inner_dim && inner_dim > -1) {
-        ERROR("Non-scalar value (ie. array) in innermost dimension!\n");
-      }
-
-      else if (current_dim >= NUM_DIMS_MAX - 1) {
-        ERROR("Too many dimensions in input! (max 127)\n");
-      }
-
-      if (current_dim > -1) tmp_dims[current_dim]++;
-
-      tmp_dims[++current_dim] = 0;
-    }
-
     // attempt to parse a value
-    else if (sscanf(buf, FORMAT, &tmp_read_val) == 1) {
-      if (current_dim < inner_dim) {
-        ERROR("Scalar values in some non-innermost dimension!\n");
-      }
-
-      ((TYPE*)out)[i++] = tmp_read_val;
-
-      if (i >= len) {
-        len *= 2;
-        out = Realloc(out, len * sizeof(TYPE));
-      }
-
-      inner_dim = current_dim;
-      tmp_dims[current_dim]++;
-    }
-
     else {
-      ERROR("Unrecognized token in input!\n");
+      if (parse_float(buf, &tv) == 0) {
+        if (current_dim < inner_dim) {
+          ERROR("Scalar values in some non-innermost dimension!\n");
+        }
+
+        ((TYPE*)out)[i++] = tv.val_f32;
+
+        if (i >= len) {
+          out = Recalloc(out, len, len * 2, sizeof(TYPE));
+          len *= 2;
+        }
+
+        if (current_dim >= 0) {
+          inner_dim = current_dim;
+          tmp_dims[current_dim]++;
+        }
+      }
+
+      else {
+        ERROR("Unrecognized token in input!\n");
+      }
     }
 
-    if (current_dim < 0) { 
-      // we have reached the end of this input array, but for now, the data
-      // reader will not stop until an EOF is read.
-      // break;
-    }
-  }
-
+  } while (current_dim >= 0);
 
   free(tmp_dims);
   free(visited);
 
-  if (i >= 0) {
-    arr->num_dims = MAX(inner_dim + 1, 1);
-    arr->data = Realloc(arr->data, i * sizeof(void*));
-    arr->dims = Realloc(arr->dims, arr->num_dims * sizeof(uint64_t));
+  if (status != 0) {
+    array_destroy(arr);
+    return NULL;
   }
-  return i;
+
+  arr->num_dims = MAX(inner_dim + 1, 0);
+  arr->data = Realloc(out, i * sizeof(float)); // TODO: generalize.
+  arr->dims = Realloc(dims, arr->num_dims * sizeof(uint64_t));
+  return arr;
 }
 
+array_t *read_many_arrays(FILE *f) {
+  array_t *arrs = array_init(ARR_LEN_INIT, sizeof(array_t*));
+  arrs->num_dims = 1;
+
+  array_t *arr;
+  int i = 0;
+  while ((arr = read_array(f))) {
+    ((array_t**)arrs->data)[i] = arr;
+    i++;
+  }
+
+  arrs->dims[0] = i;
+  arrs->data = Realloc(arrs->data, i * sizeof(array_t*));
+  arrs->dims = Realloc(arrs->dims, 1 * sizeof(uint64_t));
+
+  return arrs;
+}
 
 int main(int argc, char **argv) {
 
@@ -161,13 +198,14 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  array_t *arr     = init_array(ARR_LEN_INIT);
-  int64_t num_read = read_array(file, arr);
 
-  if (num_read >= 0)
-    print_array(arr);
-  else
-    printf(">> Error! Read nothing.\n");
+  array_t *array_of_arrs = read_many_arrays(file);
+  array_t **arrs = array_of_arrs->data;
 
-  free_array(arr);
+  printf(">> Read %ld values:\n", array_of_arrs->dims[0]);
+  for (size_t i = 0; i < array_of_arrs->dims[0]; i++) {
+    array_print(arrs[i]);
+    array_destroy(arrs[i]);
+  }
+  array_destroy(array_of_arrs);
 }
